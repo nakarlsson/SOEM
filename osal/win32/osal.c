@@ -3,9 +3,10 @@
  * LICENSE file in the project root for full license information
  */
 
-#include <winsock2.h>
+//#include <winsock2.h>
 #include <osal.h>
 #include "osal_win32.h"
+#include <assert.h>
 
 static int64_t sysfrequency;
 static double qpc2usec;
@@ -122,4 +123,85 @@ int osal_thread_create_rt(void **thandle, int stacksize, void *func, void *param
       ret = SetThreadPriority(*thandle, THREAD_PRIORITY_TIME_CRITICAL);
    }
    return ret;
+}
+
+os_mbox_t * os_mbox_create(size_t size)
+{
+   os_mbox_t * mbox;
+
+   mbox = (os_mbox_t *)malloc(sizeof(*mbox) + size * sizeof(void *));
+
+   InitializeConditionVariable(&mbox->condition);
+   InitializeCriticalSection(&mbox->lock);
+
+   mbox->r = 0;
+   mbox->w = 0;
+   mbox->count = 0;
+   mbox->size = size;
+
+   return mbox;
+}
+
+int os_mbox_fetch(os_mbox_t * mbox, void ** msg, uint32_t time)
+{
+   BOOL success = TRUE;
+
+   EnterCriticalSection(&mbox->lock);
+   while (mbox->count == 0)
+   {
+      /* FIXME - decrease timeout if woken early */
+      success = SleepConditionVariableCS(&mbox->condition, &mbox->lock, time);
+      if (!success && GetLastError() == ERROR_TIMEOUT)
+      {
+         goto timeout;
+      }
+      assert(success);
+   }
+
+   *msg = mbox->msg[mbox->r++];
+   if (mbox->r == mbox->size)
+      mbox->r = 0;
+
+   mbox->count--;
+
+timeout:
+   LeaveCriticalSection(&mbox->lock);
+   WakeAllConditionVariable(&mbox->condition);
+
+   return (success) ? 0 : 1;
+}
+
+int os_mbox_post(os_mbox_t * mbox, void * msg, uint32_t time)
+{
+   BOOL success = TRUE;
+
+   EnterCriticalSection(&mbox->lock);
+   while (mbox->count == mbox->size)
+   {
+      /* FIXME - decrease timeout if woken early */
+      success = SleepConditionVariableCS(&mbox->condition, &mbox->lock, time);
+      if (!success && GetLastError() == ERROR_TIMEOUT)
+      {
+         goto timeout;
+      }
+      assert(success);
+   }
+
+   mbox->msg[mbox->w++] = msg;
+   if (mbox->w == mbox->size)
+      mbox->w = 0;
+
+   mbox->count++;
+
+timeout:
+   LeaveCriticalSection(&mbox->lock);
+   WakeAllConditionVariable(&mbox->condition);
+
+   return (success) ? 0 : 1;
+}
+
+void os_mbox_destroy(os_mbox_t * mbox)
+{
+   EnterCriticalSection(&mbox->lock);
+   free(mbox);
 }

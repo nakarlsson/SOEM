@@ -586,6 +586,25 @@ int ecx_config_init(ecx_contextt *context, uint8 usetable)
             ecx_FPWR(context->port, configadr, ECT_REG_SM0, sizeof(ec_smt) * 2,
                &(context->slavelist[slave].SM[0]), EC_TIMEOUTRET3);
          }
+
+         if (context->slavelist[slave].mbx_proto & ECT_MBXPROT_COE)
+         {
+            context->slavelist[slave].CoEmbxq = os_mbox_create(2);
+         }
+         if (context->slavelist[slave].mbx_proto & ECT_MBXPROT_FOE)
+         {
+            context->slavelist[slave].FoEmbxq = os_mbox_create(2);
+         }
+         if (context->slavelist[slave].mbx_proto & ECT_MBXPROT_EOE)
+         {
+            context->slavelist[slave].EoEmbxq = os_mbox_create(2);
+         }
+         if (context->slavelist[slave].mbx_proto & ECT_MBXPROT_SOE)
+         {
+            context->slavelist[slave].SoEmbxq = os_mbox_create(2);
+         }
+
+
          /* some slaves need eeprom available to PDI in init->preop transition */
          ecx_eeprom2pdi(context, slave);
          /* request pre_op for slave */

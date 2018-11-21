@@ -82,7 +82,7 @@ int ecx_FOEread(ecx_contextt *context, uint16 slave, char *filename, uint32 pass
    buffersize = *psize;
    ec_clearmbx(&MbxIn);
    /* Empty slave out mailbox if something is in. Timout set to 0 */
-   wkc = ecx_mbxreceive(context, slave, (ec_mbxbuft *)&MbxIn, 0);
+   wkc = ecx_mbxreceive(context, context->slavelist[slave].FoEmbxq, slave, (ec_mbxbuft *)&MbxIn, 0);
    ec_clearmbx(&MbxOut);
    aFOEp = (ec_FOEt *)&MbxIn;
    FOEp = (ec_FOEt *)&MbxOut;
@@ -113,7 +113,7 @@ int ecx_FOEread(ecx_contextt *context, uint16 slave, char *filename, uint32 pass
          /* clean mailboxbuffer */
          ec_clearmbx(&MbxIn);
          /* read slave response */
-         wkc = ecx_mbxreceive(context, slave, (ec_mbxbuft *)&MbxIn, timeout);
+         wkc = ecx_mbxreceive(context, context->slavelist[slave].FoEmbxq, slave, (ec_mbxbuft *)&MbxIn, timeout);
          if (wkc > 0) /* succeeded to read slave response ? */
          {
             /* slave response should be FoE */
@@ -210,7 +210,7 @@ int ecx_FOEwrite(ecx_contextt *context, uint16 slave, char *filename, uint32 pas
 
    ec_clearmbx(&MbxIn);
    /* Empty slave out mailbox if something is in. Timout set to 0 */
-   wkc = ecx_mbxreceive(context, slave, (ec_mbxbuft *)&MbxIn, 0);
+   wkc = ecx_mbxreceive(context, context->slavelist[slave].FoEmbxq, slave, (ec_mbxbuft *)&MbxIn, 0);
    ec_clearmbx(&MbxOut);
    aFOEp = (ec_FOEt *)&MbxIn;
    FOEp = (ec_FOEt *)&MbxOut;
@@ -242,7 +242,7 @@ int ecx_FOEwrite(ecx_contextt *context, uint16 slave, char *filename, uint32 pas
          /* clean mailboxbuffer */
          ec_clearmbx(&MbxIn);
          /* read slave response */
-         wkc = ecx_mbxreceive(context, slave, (ec_mbxbuft *)&MbxIn, timeout);
+         wkc = ecx_mbxreceive(context, context->slavelist[slave].FoEmbxq, slave, (ec_mbxbuft *)&MbxIn, timeout);
          if (wkc > 0) /* succeeded to read slave response ? */
          {
             /* slave response should be FoE */

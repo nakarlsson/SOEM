@@ -89,7 +89,7 @@ int ecx_SoEread(ecx_contextt *context, uint16 slave, uint8 driveNo, uint8 elemen
 
    ec_clearmbx(&MbxIn);
    /* Empty slave out mailbox if something is in. Timeout set to 0 */
-   wkc = ecx_mbxreceive(context, slave, (ec_mbxbuft *)&MbxIn, 0);
+   wkc = ecx_mbxreceive(context, context->slavelist[slave].SoEmbxq, slave, (ec_mbxbuft *)&MbxIn, 0);
    ec_clearmbx(&MbxOut);
    aSoEp = (ec_SoEt *)&MbxIn;
    SoEp = (ec_SoEt *)&MbxOut;
@@ -119,7 +119,7 @@ int ecx_SoEread(ecx_contextt *context, uint16 slave, uint8 driveNo, uint8 elemen
          /* clean mailboxbuffer */
          ec_clearmbx(&MbxIn);
          /* read slave response */
-         wkc = ecx_mbxreceive(context, slave, (ec_mbxbuft *)&MbxIn, timeout);
+         wkc = ecx_mbxreceive(context, context->slavelist[slave].SoEmbxq, slave, (ec_mbxbuft *)&MbxIn, timeout);
          if (wkc > 0) /* succeeded to read slave response ? */
          {
             /* slave response should be SoE, ReadRes */
@@ -211,7 +211,7 @@ int ecx_SoEwrite(ecx_contextt *context, uint16 slave, uint8 driveNo, uint8 eleme
 
    ec_clearmbx(&MbxIn);
    /* Empty slave out mailbox if something is in. Timeout set to 0 */
-   wkc = ecx_mbxreceive(context, slave, (ec_mbxbuft *)&MbxIn, 0);
+   wkc = ecx_mbxreceive(context, context->slavelist[slave].SoEmbxq, slave, (ec_mbxbuft *)&MbxIn, 0);
    ec_clearmbx(&MbxOut);
    aSoEp = (ec_SoEt *)&MbxIn;
    SoEp = (ec_SoEt *)&MbxOut;
@@ -256,7 +256,7 @@ int ecx_SoEwrite(ecx_contextt *context, uint16 slave, uint8 driveNo, uint8 eleme
             /* clean mailboxbuffer */
             ec_clearmbx(&MbxIn);
             /* read slave response */
-            wkc = ecx_mbxreceive(context, slave, (ec_mbxbuft *)&MbxIn, timeout);
+            wkc = ecx_mbxreceive(context, context->slavelist[slave].SoEmbxq, slave, (ec_mbxbuft *)&MbxIn, timeout);
             if (wkc > 0) /* succeeded to read slave response ? */
             {
                NotLast = FALSE;

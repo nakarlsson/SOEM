@@ -24,13 +24,143 @@ boolean needlf;
 volatile int wkc;
 boolean inOP;
 uint8 currentgroup = 0;
+OSAL_THREAD_HANDLE thread3;
+uint8 txbuf[1024];
+
+OSAL_THREAD_FUNC eoe_handler_rx(void *lpParam)
+{
+   ecx_contextt *context = (ecx_contextt *)lpParam;
+   ec_mbxt * mbxout;
+   int wkc;
+
+   /** Current RX fragment number */
+   uint8_t rxfragmentno = 0;
+   /** Complete RX frame size of current frame */
+   uint16_t rxframesize = 0;
+   /** Current RX data offset in frame */
+   uint16_t rxframeoffset = 0;
+   /** Current RX frame number */
+   uint16_t rxframeno = 0;
+   uint8 rxbuf[1024];
+   int size_of_rx = sizeof(rxbuf);
+
+   for (;;)
+   {
+      /* */
+      os_mbox_fetch(context->EoEmbxq, (void **)&mbxout, OS_WAIT_FOREVER);
+
+      if (mbxout->slaveidx == 1)
+      {
+         /* Pass received Mbx data to EoE recevive fragement function that 
+          * that will start/continue fill a Ethernet frame buffer
+          */
+         wkc = ecx_EOEreadfragment(&mbxout->data,
+            &rxfragmentno,
+            &rxframesize,
+            &rxframeoffset,
+            &rxframeno,
+            &size_of_rx,
+            rxbuf);
+         /* wkc == 1 would mean a frame is complete , last fragement flag have been set and all 
+          * other checks must have past
+          */
+         if (wkc > 0)
+         {
+            /* Sanity check that received buffer still is OK */
+            if (sizeof(txbuf) != size_of_rx)
+            {
+               printf("Size differs, expected %d , received %d\n", sizeof(txbuf), size_of_rx);
+            }
+            else
+            {
+               printf("Size OK, expected %d , received %d\n", sizeof(txbuf), size_of_rx);
+            }
+            /* Check that the TX and RX frames are EQ */
+            if (memcmp(rxbuf, txbuf, size_of_rx))
+            {
+               printf("memcmp result != 0\n");
+            }
+            else
+            {
+               printf("memcmp result == 0\n");
+            }
+         }
+         else
+         {
+            /* We're not dune yet, trigger a read request, to replace with other Mbx full
+             * trogger mechanism??? FMMU of mxb full 
+             */
+            ec_mbxrecvq_post(mbxout->slaveidx, EC_TIMEOUTRXM);
+         }
+      }
+      else
+      {
+         printf("Don't know what to do with EoE data for slave: %d\n", mbxout->slaveidx);
+      }      
+      free(mbxout);
+   }
+}
+
+void test_eoe(void)
+{
+   /* Create dummy layer 2 frame to send over EoE */
+   int ixme;
+   ec_setupheader(&txbuf);
+   for (ixme = ETH_HEADERSIZE; ixme < sizeof(txbuf); ixme++)
+   {
+      txbuf[ixme] = (uint8)rand();
+   }
+
+   eoe_param_t ipsettings, re_ipsettings;
+   memset(&ipsettings, 0, sizeof(ipsettings));
+   memset(&re_ipsettings, 0, sizeof(re_ipsettings));
+
+   ipsettings.ip_set = 1;
+   ipsettings.subnet_set = 1;
+   ipsettings.default_gateway_set = 1;
+
+   EOE_IP4_ADDR_TO_U32(&ipsettings.ip, 192, 168, 9, 200);
+   EOE_IP4_ADDR_TO_U32(&ipsettings.subnet, 255, 255, 255, 0);
+   EOE_IP4_ADDR_TO_U32(&ipsettings.default_gateway, 0, 0, 0, 0);
+   
+   /* Send a set IP request */
+   ec_EOEsetIp(1, 0, &ipsettings, EC_TIMEOUTRXM);
+
+   /* Send a made up frame to trigger a fragmented transfer 
+    * Used with a special bound impelmentaion of SOES. Will
+    * trigger a fragmented transfer back of the same frame.
+    */
+   ec_EOEsend(1, 0, sizeof(txbuf), txbuf, EC_TIMEOUTRXM);
+   /* Trigger an MBX read request, to be replaced by slave Mbx
+   * full notification via polling of FMMU status process data
+   */
+   ec_mbxrecvq_post(1, EC_TIMEOUTRXM);
+
+   /* Send a get IP request, should return the expected IP back */
+   ec_EOEgetIp(1, 0, &re_ipsettings, EC_TIMEOUTRXM);
+
+   printf("recieved IP (%d.%d.%d.%d)\n",
+      eoe_ip4_addr1(&re_ipsettings.ip),
+      eoe_ip4_addr2(&re_ipsettings.ip),
+      eoe_ip4_addr3(&re_ipsettings.ip),
+      eoe_ip4_addr4(&re_ipsettings.ip));
+   printf("recieved subnet (%d.%d.%d.%d)\n",
+      eoe_ip4_addr1(&re_ipsettings.subnet),
+      eoe_ip4_addr2(&re_ipsettings.subnet),
+      eoe_ip4_addr3(&re_ipsettings.subnet),
+      eoe_ip4_addr4(&re_ipsettings.subnet));
+   printf("recieved gateway (%d.%d.%d.%d)\n",
+      eoe_ip4_addr1(&re_ipsettings.default_gateway),
+      eoe_ip4_addr2(&re_ipsettings.default_gateway),
+      eoe_ip4_addr3(&re_ipsettings.default_gateway),
+      eoe_ip4_addr4(&re_ipsettings.default_gateway));
+}
 
 void simpletest(char *ifname)
 {
-    int i, j, oloop, iloop, chk;
-    needlf = FALSE;
-    inOP = FALSE;
-
+   int i, j, oloop, iloop, chk;
+   needlf = FALSE;
+   inOP = FALSE;
    printf("Starting simple test\n");
 
    /* initialise SOEM, bind socket to ifname */
@@ -39,6 +169,8 @@ void simpletest(char *ifname)
       printf("ec_init on %s succeeded.\n",ifname);
       /* find and auto-config slaves */
 
+      /* Create a asyncronous EoE handled */
+      osal_thread_create(&thread3, 128000, &eoe_handler_rx, &ecx_context);
 
        if ( ec_config_init(FALSE) > 0 )
       {
@@ -68,8 +200,13 @@ void simpletest(char *ifname)
          /* send one valid process data to make outputs in slaves happy*/
          ec_send_processdata();
          ec_receive_processdata(EC_TIMEOUTRET);
+
+         /* Simple EoE test */
+         test_eoe();
+   
          /* request OP state for all slaves */
          ec_writestate(0);
+
          chk = 40;
          /* wait for all slaves to reach OP state */
          do

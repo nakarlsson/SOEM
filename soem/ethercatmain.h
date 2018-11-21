@@ -209,12 +209,20 @@ typedef struct ec_slave
    uint8            eep_pdi;
    /** CoE details */
    uint8            CoEdetails;
+   /** CoE mailbox Q */
+   os_mbox_t * CoEmbxq;
    /** FoE details */
    uint8            FoEdetails;
+   /** FoE mailbox Q */
+   os_mbox_t * FoEmbxq;
    /** EoE details */
    uint8            EoEdetails;
+   /** EoE mailbox Q */
+   os_mbox_t * EoEmbxq;
    /** SoE details */
    uint8            SoEdetails;
+   /** SoE mailbox Q */
+   os_mbox_t * SoEmbxq;
    /** E-bus current */
    int16            Ebuscurrent;
    /** if >0 block use of LRW in processdata */
@@ -306,6 +314,14 @@ typedef struct ec_eepromPDO
 
 /** mailbox buffer array */
 typedef uint8 ec_mbxbuft[EC_MAXMBX + 1];
+
+typedef struct ec_mbx
+{
+   int timeout;
+   uint16 slaveidx;
+   uint8  mbxtype;
+   ec_mbxbuft data;
+} ec_mbxt;
 
 /** standard ethercat mailbox header */
 PACKED_BEGIN
@@ -421,6 +437,9 @@ typedef struct ecx_context
    ec_eepromFMMUt *eepFMMU;
    /** registered FoE hook */
    int            (*FOEhook)(uint16 slave, int packetnumber, int datasize);
+   os_mbox_t * mbxrxq;
+   os_mbox_t * mbxtxq;
+   os_mbox_t * EoEmbxq;
 } ecx_contextt;
 
 #ifdef EC_VER1
@@ -454,7 +473,8 @@ int ec_writestate(uint16 slave);
 uint16 ec_statecheck(uint16 slave, uint16 reqstate, int timeout);
 int ec_mbxempty(uint16 slave, int timeout);
 int ec_mbxsend(uint16 slave,ec_mbxbuft *mbx, int timeout);
-int ec_mbxreceive(uint16 slave, ec_mbxbuft *mbx, int timeout);
+int ec_mbxrecvq_post(uint16 slave, int timeout);
+int ec_mbxreceive(os_mbox_t * que, uint16 slave, ec_mbxbuft *mbx, int timeout);
 void ec_esidump(uint16 slave, uint8 *esibuf);
 uint32 ec_readeeprom(uint16 slave, uint16 eeproma, int timeout);
 int ec_writeeeprom(uint16 slave, uint16 eeproma, uint16 data, int timeout);
@@ -497,7 +517,8 @@ int ecx_writestate(ecx_contextt *context, uint16 slave);
 uint16 ecx_statecheck(ecx_contextt *context, uint16 slave, uint16 reqstate, int timeout);
 int ecx_mbxempty(ecx_contextt *context, uint16 slave, int timeout);
 int ecx_mbxsend(ecx_contextt *context, uint16 slave,ec_mbxbuft *mbx, int timeout);
-int ecx_mbxreceive(ecx_contextt *context, uint16 slave, ec_mbxbuft *mbx, int timeout);
+int ecx_mbxrecvq_post(ecx_contextt *context, uint16 slave, int timeout);
+int ecx_mbxreceive(ecx_contextt *context, os_mbox_t * que, uint16 slave, ec_mbxbuft *mbx, int timeout);
 void ecx_esidump(ecx_contextt *context, uint16 slave, uint8 *esibuf);
 uint32 ecx_readeeprom(ecx_contextt *context, uint16 slave, uint16 eeproma, int timeout);
 int ecx_writeeeprom(ecx_contextt *context, uint16 slave, uint16 eeproma, uint16 data, int timeout);

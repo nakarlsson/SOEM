@@ -40,6 +40,10 @@ typedef struct osal_timer
     ec_timet stop_time;
 } osal_timert;
 
+#ifndef OS_MBOX
+typedef void os_mbox_t;
+#endif
+
 void osal_timer_start(osal_timert * self, uint32 timeout_us);
 boolean osal_timer_is_expired(osal_timert * self);
 int osal_usleep(uint32 usec);
@@ -47,6 +51,11 @@ ec_timet osal_current_time(void);
 void osal_time_diff(ec_timet *start, ec_timet *end, ec_timet *diff);
 int osal_thread_create(void *thandle, int stacksize, void *func, void *param);
 int osal_thread_create_rt(void *thandle, int stacksize, void *func, void *param);
+
+os_mbox_t * os_mbox_create(size_t size);
+int os_mbox_fetch(os_mbox_t * mbox, void ** msg, uint32_t time);
+int os_mbox_post(os_mbox_t * mbox, void * msg, uint32_t time);
+void os_mbox_destroy(os_mbox_t * mbox);
 
 #ifdef __cplusplus
 }

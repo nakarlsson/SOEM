@@ -19,9 +19,7 @@
 #include <string.h>
 #include "osal.h"
 #include "oshw.h"
-#include "ethercattype.h"
-#include "ethercatbase.h"
-#include "ethercatmain.h"
+#include "ethercat.h"
 
 
 /** delay in us for eeprom ready loop */
@@ -99,6 +97,7 @@ int64                   ec_DCtime;
 ecx_portt               ecx_port;
 ecx_redportt            ecx_redport;
 
+
 ecx_contextt  ecx_context = {
     &ecx_port,          // .port          =
     &ec_slave[0],       // .slavelist     =
@@ -120,7 +119,7 @@ ecx_contextt  ecx_context = {
     &ec_PDOdesc[0],     // .PDOdesc       =
     &ec_SM,             // .eepSM         =
     &ec_FMMU,           // .eepFMMU       =
-    NULL                // .FOEhook()
+    NULL,                // .FOEhook()
 };
 #endif
 
@@ -956,6 +955,317 @@ int ecx_mbxempty(ecx_contextt *context, uint16 slave, int timeout)
    return 0;
 }
 
+/** Post a mailbox send job
+* @param[in]  context    = context struct
+* @param[in]  slave      = Slave number
+* @param[in]  mbx        = Mailbox data
+* @param[in]  timeout    = Timeout in us
+* @return Work counter (>0 is success)
+*/
+int ecx_mbxsendq_post(ecx_contextt *context, uint16 slave, ec_mbxbuft *mbx, int timeout)
+{
+
+   int ret_mbx;
+   int wkc;
+   ec_mbxheadert * MbxHeader = (ec_mbxheadert *)mbx;
+   /* TODO: Create a mailbox pool */
+   ec_mbxt * msend = malloc(sizeof(ec_mbxt));
+   wkc = 0;
+   if (msend != NULL)
+   {
+      /* TODO: Remove copy and make sender alloc mbx from pool */
+      memcpy(msend->data, mbx, sizeof(ec_mbxbuft));
+      msend->mbxtype = MbxHeader->mbxtype;
+      msend->slaveidx = slave;
+      msend->timeout = timeout;
+      /* Post the job to the mailbox tx Q */
+      ret_mbx = os_mbox_post(context->mbxtxq, msend, timeout);
+      /* If post succeeded, return wkc = 1 */
+      if (ret_mbx == 0)
+      {
+         wkc = 1;
+      }
+   }
+   return wkc;
+}
+
+/** Post a mailbox read job
+* @param[in]  context    = context struct
+* @param[in]  slave      = Slave number
+* @param[in]  mbx        = Mailbox data
+* @param[in]  timeout    = Timeout in us
+* @return Work counter (>0 is success)
+*/
+int ecx_mbxrecvq_post(ecx_contextt *context, uint16 slave, int timeout)
+{
+   int ret_mbx;
+   int wkc;
+   /* TODO: Create a mailbox pool */
+   ec_mbxt * mrecv = malloc(sizeof(ec_mbxt));
+   wkc = 0;
+   if (mrecv != NULL)
+   {
+      mrecv->slaveidx = slave;
+      mrecv->timeout = timeout;
+      /* Post the job to the mailbox rx Q */
+      ret_mbx = os_mbox_post(context->mbxrxq, mrecv, timeout);
+      /* If post succeeded, return wkc = 1 */
+      if (ret_mbx == 0)
+      {
+         wkc = 1;
+      }
+   }
+
+   return wkc;
+}
+
+/** Handle a mailbox send job(s)
+* @param[in]  context    = context struct
+*/
+OSAL_THREAD_FUNC ecx_mbxworkersend(void *lpParam)
+{
+   ecx_contextt *context = (ecx_contextt *)lpParam;
+   uint16 mbxwo, mbxl, configadr;
+   ec_mbxt * mbxout;
+   int wkc;
+
+   /* TODO: make a function callable from any thread with time to wait as a parameter 
+    * with waitfor 0 it can be placed in the processdata thread
+    */
+   for (;;)
+   {
+      /* Wait for send job to arraive
+       * TODO: Check if it make sense to create a mulitdatagram frame, basically
+       * consume as many send jobs from the Q that fits in one frame.
+       */
+      os_mbox_fetch(context->mbxtxq, (void **)&mbxout, OS_WAIT_FOREVER);
+      
+      /* Function equal to legacy ecx_mbxsend */
+      wkc = 0;
+      configadr = context->slavelist[mbxout->slaveidx].configadr;
+      mbxl = context->slavelist[mbxout->slaveidx].mbx_l;
+      if ((mbxl > 0) && (mbxl <= EC_MAXMBX))
+      {
+         if (ecx_mbxempty(context, mbxout->slaveidx, mbxout->timeout))
+         {
+            mbxwo = context->slavelist[mbxout->slaveidx].mbx_wo;
+            /* write slave in mailbox */
+            wkc = ecx_FPWR(context->port, configadr, mbxwo, mbxl, mbxout->data, EC_TIMEOUTRET3);
+         }
+         else
+         {
+            wkc = 0;
+         }
+      }
+      if (mbxout != NULL)
+      {
+         free(mbxout);
+      }
+   }
+}
+
+/** Handle a mailbox receive job(s)
+* @param[in]  context    = context struct
+*/
+OSAL_THREAD_FUNC ecx_mbxworkerrecv(void *lpParam)
+{
+   ecx_contextt *context = (ecx_contextt *)lpParam;
+   int wkc = 0;
+   ec_mbxt * mbxin;
+   uint16 mbxro, mbxl, configadr;
+
+   int wkc2;
+   uint16 SMstat;
+   uint8 SMcontr;
+   ec_mbxheadert *mbxh;
+   ec_emcyt *EMp;
+   ec_mbxerrort *MBXEp;
+
+   /* TODO: make a function callable from any thread with time to wait as a parameter
+   * with waitfor 0 it can be placed in the processdata thread
+   */
+
+   for (;;)
+   {
+
+      /* Wait for receive job to arraive
+      * TODO: Check if it make sense to create a mulitdatagram frame, basically
+      * consume as many receive jobs from the Q that fits in one frame.
+      */
+      os_mbox_fetch(context->mbxrxq, (void **)&mbxin, OS_WAIT_FOREVER);
+
+      /* Function equal to legacy ecx_mbxreceive */
+      configadr = context->slavelist[mbxin->slaveidx].configadr;
+      mbxl = context->slavelist[mbxin->slaveidx].mbx_rl;
+      if ((mbxl > 0) && (mbxl <= EC_MAXMBX))
+      {
+         osal_timert timer;
+
+         osal_timer_start(&timer, mbxin->timeout);
+         wkc = 0;
+         do /* wait for read mailbox available */
+         {
+            SMstat = 0;
+            wkc = ecx_FPRD(context->port, configadr, ECT_REG_SM1STAT, sizeof(SMstat), &SMstat, EC_TIMEOUTRET);
+            SMstat = etohs(SMstat);
+            if (((SMstat & 0x08) == 0) && (mbxin->timeout > EC_LOCALDELAY))
+            {
+               osal_usleep(EC_LOCALDELAY);
+            }
+         } while (((wkc <= 0) || ((SMstat & 0x08) == 0)) && (osal_timer_is_expired(&timer) == FALSE));
+
+         if ((wkc > 0) && ((SMstat & 0x08) > 0)) /* read mailbox available ? */
+         {
+            mbxro = context->slavelist[mbxin->slaveidx].mbx_ro;
+            mbxh = (ec_mbxheadert *)mbxin->data;
+            do
+            {
+               wkc = ecx_FPRD(context->port, configadr, mbxro, mbxl, mbxin->data, EC_TIMEOUTRET); /* get mailbox */
+               if ((wkc > 0) && ((mbxh->mbxtype & 0x0f) == 0x00)) /* Mailbox error response? */
+               {
+                  MBXEp = (ec_mbxerrort *)mbxin->data;
+                  ecx_mbxerror(context, mbxin->slaveidx, etohs(MBXEp->Detail));
+                  wkc = 0; /* prevent emergency to cascade up, it is already handled. */
+                  free(mbxin);
+               }
+               else if ((wkc > 0) && ((mbxh->mbxtype & 0x0f) == ECT_MBXT_COE)) /* CoE response? */
+               {
+                  EMp = (ec_emcyt *)mbxin->data;
+                  if ((etohs(EMp->CANOpen) >> 12) == 0x01) /* Emergency request? */
+                  {
+                     ecx_mbxemergencyerror(context, mbxin->slaveidx, etohs(EMp->ErrorCode), EMp->ErrorReg,
+                        EMp->bData, etohs(EMp->w1), etohs(EMp->w2));
+                     wkc = 0; /* prevent emergency to cascade up, it is already handled. */
+                     free(mbxin);
+                  }
+                  else
+                  {
+                     /* All data to be handled by  slave send/receive API
+                     */
+                     if (os_mbox_post(context->slavelist[mbxin->slaveidx].CoEmbxq, mbxin, 0))
+                     {
+                        free(mbxin);
+                     }
+                  }
+               }
+               else if ((wkc > 0) && ((mbxh->mbxtype & 0x0f) == ECT_MBXT_EOE)) /* EoE response? */
+               {
+
+                  ec_EOEt * eoembx = (ec_EOEt *)mbxin->data;
+                  uint16 frameinfo1 = etohs(eoembx->frameinfo1);
+
+                  /* All non fragement data frame types are expected to be handled by 
+                   * slave send/receive API
+                   */
+                  if ((EOE_HDR_FRAME_TYPE_GET(frameinfo1) > EOE_FRAG_DATA) &&
+                     (EOE_HDR_FRAME_TYPE_GET(frameinfo1) <= EOE_GET_ADDR_FILTER_RESP))
+                  {
+                     if (os_mbox_post(context->slavelist[mbxin->slaveidx].EoEmbxq, mbxin, 0))
+                     {
+                        /* Replace with buffer returned to pool */
+                        free(mbxin);
+                     }
+                  }
+                  /* TODO: Check for out of range frame types??? */
+                  /* Post a job to the generic EoE data fragment handler */
+                  else
+                  {
+                     if (os_mbox_post(context->EoEmbxq, mbxin, 0))
+                     {
+                        /* Replace with buffer returned to pool */
+                        free(mbxin);
+                     }
+                  }
+               }
+               else
+               {
+                  if (wkc <= 0) /* read mailbox lost */
+                  {
+                     SMstat ^= 0x0200; /* toggle repeat request */
+                     SMstat = htoes(SMstat);
+                     wkc2 = ecx_FPWR(context->port, configadr, ECT_REG_SM1STAT, sizeof(SMstat), &SMstat, EC_TIMEOUTRET);
+                     SMstat = etohs(SMstat);
+                     do /* wait for toggle ack */
+                     {
+                        wkc2 = ecx_FPRD(context->port, configadr, ECT_REG_SM1CONTR, sizeof(SMcontr), &SMcontr, EC_TIMEOUTRET);
+                     } while (((wkc2 <= 0) || ((SMcontr & 0x02) != (HI_BYTE(SMstat) & 0x02))) && (osal_timer_is_expired(&timer) == FALSE));
+                     do /* wait for read mailbox available */
+                     {
+                        wkc2 = ecx_FPRD(context->port, configadr, ECT_REG_SM1STAT, sizeof(SMstat), &SMstat, EC_TIMEOUTRET);
+                        SMstat = etohs(SMstat);
+                        if (((SMstat & 0x08) == 0) && (mbxin->timeout > EC_LOCALDELAY))
+                        {
+                           osal_usleep(EC_LOCALDELAY);
+                        }
+                     } while (((wkc2 <= 0) || ((SMstat & 0x08) == 0)) && (osal_timer_is_expired(&timer) == FALSE));
+                  }
+               }
+            } while ((wkc <= 0) && (osal_timer_is_expired(&timer) == FALSE)); /* if WKC<=0 repeat */
+         }
+         else /* no read mailbox available */
+         {
+            wkc = 0;
+         }
+      }
+   }
+}
+
+/** Post slave mailbox write to TX job q.
+* @param[in]  context    = context struct
+* @param[in]  slave      = Slave number
+* @param[in] mbx        = Mailbox data
+* @param[in]  timeout    = Timeout in us
+* @return Work counter (>0 is success)
+*/
+int ecx_mbxsend(ecx_contextt *context, uint16 slave, ec_mbxbuft *mbx, int timeout)
+{
+   uint16 mbxl, configadr;
+   int wkc;
+
+   wkc = 0;
+   configadr = context->slavelist[slave].configadr;
+   mbxl = context->slavelist[slave].mbx_l;
+   if ((mbxl > 0) && (mbxl <= EC_MAXMBX))
+   {
+      wkc = ecx_mbxsendq_post(context, slave, mbx, timeout);
+   }
+
+   return wkc;
+}
+
+/** Post slave mailbox read to RX job q.
+* Supports Mailbox Link Layer with repeat requests.
+* @param[in]  context    = context struct
+* @param[in]  que        = Slave number
+* @param[in]  slave      = Slave number
+* @param[out] mbx        = Mailbox data
+* @param[in]  timeout    = Timeout in us
+* @return Work counter (>0 is success)
+*/
+int ecx_mbxreceive(ecx_contextt *context, os_mbox_t * que, uint16 slave, ec_mbxbuft *mbx, int timeout)
+{
+   ec_mbxt * mbxin;
+   int ret_mbx, wkc;
+   uint16  mbxl, configadr;
+   
+   wkc = 0;
+   configadr = context->slavelist[slave].configadr;
+   mbxl = context->slavelist[slave].mbx_rl;
+   if ((mbxl > 0) && (mbxl <= EC_MAXMBX))
+   {
+      ecx_mbxrecvq_post(context, slave, timeout);
+      ret_mbx = os_mbox_fetch(que, &mbxin, (timeout / 1000));
+      if (ret_mbx == 0)
+      {
+         memcpy(mbx, mbxin->data, sizeof(ec_mbxbuft));
+         free(mbxin);
+         wkc = 1;
+      }      
+   }
+   return wkc;
+}
+
+
 /** Write IN mailbox to slave.
  * @param[in]  context    = context struct
  * @param[in]  slave      = Slave number
@@ -963,7 +1273,7 @@ int ecx_mbxempty(ecx_contextt *context, uint16 slave, int timeout)
  * @param[in]  timeout    = Timeout in us
  * @return Work counter (>0 is success)
  */
-int ecx_mbxsend(ecx_contextt *context, uint16 slave,ec_mbxbuft *mbx, int timeout)
+int ecx_mbxsend_raw(ecx_contextt *context, uint16 slave,ec_mbxbuft *mbx, int timeout)
 {
    uint16 mbxwo,mbxl,configadr;
    int wkc;
@@ -996,7 +1306,7 @@ int ecx_mbxsend(ecx_contextt *context, uint16 slave,ec_mbxbuft *mbx, int timeout
  * @param[in]  timeout    = Timeout in us
  * @return Work counter (>0 is success)
  */
-int ecx_mbxreceive(ecx_contextt *context, uint16 slave, ec_mbxbuft *mbx, int timeout)
+int ecx_mbxreceive_raw(ecx_contextt *context, uint16 slave, ec_mbxbuft *mbx, int timeout)
 {
    uint16 mbxro,mbxl,configadr;
    int wkc=0;
@@ -2003,8 +2313,17 @@ void ec_packeterror(uint16 Slave, uint16 Index, uint8 SubIdx, uint16 ErrorCode)
  * @return >0 if OK
  * @see ecx_init
  */
+OSAL_THREAD_HANDLE thread1;
+OSAL_THREAD_HANDLE thread2;
 int ec_init(const char * ifname)
 {
+   ecx_context.mbxrxq = os_mbox_create(10);
+   ecx_context.mbxtxq = os_mbox_create(10);
+   ecx_context.EoEmbxq = os_mbox_create(10);
+
+   osal_thread_create(&thread1, 128000, &ecx_mbxworkersend, &ecx_context);
+   osal_thread_create(&thread2, 128000, &ecx_mbxworkerrecv, &ecx_context);
+
    return ecx_init(&ecx_context, ifname);
 }
 
@@ -2164,6 +2483,11 @@ int ec_mbxsend(uint16 slave,ec_mbxbuft *mbx, int timeout)
    return ecx_mbxsend (&ecx_context, slave, mbx, timeout);
 }
 
+int ec_mbxrecvq_post(uint16 slave, int timeout)
+{
+   return ecx_mbxrecvq_post(&ecx_context, slave, timeout);
+}
+
 /** Read OUT mailbox from slave.
  * Supports Mailbox Link Layer with repeat requests.
  * @param[in]  slave      = Slave number
@@ -2172,9 +2496,9 @@ int ec_mbxsend(uint16 slave,ec_mbxbuft *mbx, int timeout)
  * @return Work counter (>0 is success)
  * @see ecx_mbxreceive
  */
-int ec_mbxreceive(uint16 slave, ec_mbxbuft *mbx, int timeout)
+int ec_mbxreceive(os_mbox_t * que, uint16 slave, ec_mbxbuft *mbx, int timeout)
 {
-   return ecx_mbxreceive (&ecx_context, slave, mbx, timeout);
+   return ecx_mbxreceive (&ecx_context, que, slave, mbx, timeout);
 }
 
 /** Dump complete EEPROM data from slave in buffer.
