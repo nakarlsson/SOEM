@@ -8,7 +8,6 @@
  *
  * (c)Arthur Ketels 2010 - 2011
  */
-
 #include <stdio.h>
 #include <string.h>
 //#include <Mmsystem.h>
@@ -26,14 +25,129 @@ volatile int wkc;
 volatile int rtcnt;
 boolean inOP;
 uint8 currentgroup = 0;
+ec_mbxbuft mbx[32];
+
+uint8 txbuf[1024];
+
+/** Current RX fragment number */
+uint8_t rxfragmentno = 0;
+/** Complete RX frame size of current frame */
+uint16_t rxframesize = 0;
+/** Current RX data offset in frame */
+uint16_t rxframeoffset = 0;
+/** Current RX frame number */
+uint16_t rxframeno = 0;
+uint8 rxbuf[1024];
+
+uint16 eoe_slave = 1;
+uint16 eoe_frame_send_and_read = 0;
+
+
+/** registered EoE hook */
+int eoe_hook(ecx_contextt * context, uint16 slave, void * eoembx)
+{
+   int size_of_rx = sizeof(rxbuf);
+   int eoe_hook_wkc;
+   /* Pass received Mbx data to EoE recevive fragment function that
+   * that will start/continue fill an Ethernet frame buffer
+   */
+   size_of_rx = sizeof(rxbuf);
+   eoe_hook_wkc = ecx_EOEreadfragment(eoembx,
+      &rxfragmentno,
+      &rxframesize,
+      &rxframeoffset,
+      &rxframeno,
+      &size_of_rx,
+      rxbuf);
+
+   printf("Read frameno %d, fragmentno %d\n", rxframeno, rxfragmentno);
+
+   /* wkc == 1 would mean a frame is complete , last fragement flag have been set and all
+   * other checks must have past
+   */
+   if (eoe_hook_wkc > 0)
+   {
+      ec_etherheadert *bp = (ec_etherheadert *)rxbuf;
+      uint16 type = ntohs(bp->etype);
+      printf("Frameno %d, type 0x%x complete\n", rxframeno, type);
+      if (type == ETH_P_ECAT)
+      {
+         /* Sanity check that received buffer still is OK */
+         if (sizeof(txbuf) != size_of_rx)
+         {
+            printf("Size differs, expected %d , received %d\n", sizeof(txbuf), size_of_rx);
+         }
+         else
+         {
+            printf("Size OK, expected %d , received %d\n", sizeof(txbuf), size_of_rx);
+         }
+         /* Check that the TX and RX frames are EQ */
+         if (memcmp(rxbuf, txbuf, size_of_rx))
+         {
+            printf("memcmp result != 0\n");
+         }
+         else
+         {
+            printf("memcmp result == 0\n");
+         }
+         eoe_frame_send_and_read = 0;
+      }
+      else
+      {
+         printf("Skip type 0x%x\n", type);
+      }
+   }
+
+   return (eoe_hook_wkc >= 0) ? 1 : 0;
+}
+
+void setup_eoe(ecx_contextt * context)
+{
+   /* Set the HOOK */
+   context->EOEhook = eoe_hook;
+
+   eoe_param_t ipsettings, re_ipsettings;
+   memset(&ipsettings, 0, sizeof(ipsettings));
+   memset(&re_ipsettings, 0, sizeof(re_ipsettings));
+
+   ipsettings.ip_set = 1;
+   ipsettings.subnet_set = 1;
+   ipsettings.default_gateway_set = 1;
+
+   EOE_IP4_ADDR_TO_U32(&ipsettings.ip, 192, 168, 9, 200);
+   EOE_IP4_ADDR_TO_U32(&ipsettings.subnet, 255, 255, 255, 0);
+   EOE_IP4_ADDR_TO_U32(&ipsettings.default_gateway, 0, 0, 0, 0);
+
+   /* Send a set IP request */
+   ec_EOEsetIp(1, 0, &ipsettings, EC_TIMEOUTRXM);
+
+   /* Send a get IP request, should return the expected IP back */
+   ec_EOEgetIp(1, 0, &re_ipsettings, EC_TIMEOUTRXM);
+
+   printf("recieved IP (%d.%d.%d.%d)\n",
+      eoe_ip4_addr1(&re_ipsettings.ip),
+      eoe_ip4_addr2(&re_ipsettings.ip),
+      eoe_ip4_addr3(&re_ipsettings.ip),
+      eoe_ip4_addr4(&re_ipsettings.ip));
+   printf("recieved subnet (%d.%d.%d.%d)\n",
+      eoe_ip4_addr1(&re_ipsettings.subnet),
+      eoe_ip4_addr2(&re_ipsettings.subnet),
+      eoe_ip4_addr3(&re_ipsettings.subnet),
+      eoe_ip4_addr4(&re_ipsettings.subnet));
+   printf("recieved gateway (%d.%d.%d.%d)\n",
+      eoe_ip4_addr1(&re_ipsettings.default_gateway),
+      eoe_ip4_addr2(&re_ipsettings.default_gateway),
+      eoe_ip4_addr3(&re_ipsettings.default_gateway),
+      eoe_ip4_addr4(&re_ipsettings.default_gateway));
+}
 
 /* most basic RT thread for process data, just does IO transfer */
 void CALLBACK RTthread(UINT uTimerID, UINT uMsg, DWORD_PTR dwUser, DWORD_PTR dw1,  DWORD_PTR dw2)
 {
     IOmap[0]++;
-
     ec_send_processdata();
     wkc = ec_receive_processdata(EC_TIMEOUTRET);
+    ecx_mbxhandler(&ecx_context, 0, 4);
     rtcnt++;
     /* do RT control stuff here */
 }
@@ -115,8 +229,10 @@ int AEPsetup(uint16 slave)
 
 void simpletest(char *ifname)
 {
-    int i, j, oloop, iloop, wkc_count, chk, slc;
+    int i, j, oloop, iloop, wkc_count, chk, slc /*, psize*/;
+    int ixme;
     UINT mmResult;
+    /*uint32 prodcode;*/
 
     needlf = FALSE;
     inOP = FALSE;
@@ -155,7 +271,6 @@ void simpletest(char *ifname)
              }
          }
 
-
          ec_config_map(&IOmap);
 
          ec_configdc();
@@ -184,10 +299,39 @@ void simpletest(char *ifname)
          /* start RT thread as periodic MM timer */
          mmResult = timeSetEvent(1, 0, RTthread, 0, TIME_PERIODIC);
 
+         int sc = 0;
+         uint16 mbxsl = 0;
+         for(i = 1; i <= ec_slavecount; i++)
+         {
+            if(ec_slave[i].mbx_l > 0)
+            {
+//               printf("CoE slave handler\r\n");
+               if(!mbxsl) mbxsl = i;
+               ec_slave[i].coembxin = (uint8 *)&(mbx[sc++]);
+               ecx_setmbxhandlerstate(&ecx_context, i, ECT_MBXH_CYCLIC);
+               if (ec_slave[i].mbx_proto & ECT_MBXPROT_EOE)
+               {
+                  ec_slave[i].eoembxin = (uint8 *)&(mbx[sc++]);
+               }
+            }
+         }
+         setup_eoe(&ecx_context);
+         ec_setupheader(&txbuf);
+         for (ixme = ETH_HEADERSIZE; ixme < sizeof(txbuf); ixme++)
+         {
+            txbuf[ixme] = (uint8)rand();
+         }
+         /* Send a made up frame to trigger a fragmented transfer
+         * Used with a special bound impelmentaion of SOES. Will
+         * trigger a fragmented transfer back of the same frame.
+         */
+         ec_EOEsend(1, 0, sizeof(txbuf), txbuf, EC_TIMEOUTRXM);
+         eoe_frame_send_and_read = 1;
+
          /* request OP state for all slaves */
          ec_writestate(0);
          chk = 40;
-         /* wait for all slaves to reach OP state */
+         /* wait for all slaves to reach OP state */ 
          do
          {
             ec_statecheck(0, EC_STATE_OPERATIONAL, 50000);
@@ -219,7 +363,21 @@ void simpletest(char *ifname)
                         }
                         printf(" T:%lld\r",ec_DCtime);
                         needlf = TRUE;
+                    }          
+                    if (eoe_frame_send_and_read == 0)
+                    {
+                       /* Send a new frame */
+                       for (ixme = ETH_HEADERSIZE; ixme < sizeof(txbuf); ixme++)
+                       {
+                          txbuf[ixme] = (uint8)rand();
+                       }
+                       printf("Send a new frame\n");
+                       ec_EOEsend(1, 0, sizeof(txbuf), txbuf, EC_TIMEOUTRXM);
+                       eoe_frame_send_and_read = 1;
+
                     }
+                    
+
                     osal_usleep(50000);
 
             }
@@ -336,8 +494,6 @@ OSAL_THREAD_FUNC ecatcheck(void *lpParam)
         }
         osal_usleep(10000);
     }
-
-    return 0;
 }
 
 char ifbuf[1024];
@@ -345,7 +501,7 @@ char ifbuf[1024];
 int main(int argc, char *argv[])
 {
    ec_adaptert * adapter = NULL;
-   printf("SOEM (Simple Open EtherCAT Master)\nSimple test\n");
+   printf("SOEM (Simple Open EtherCAT Master)\nSimple test 2\n");
 
    if (argc > 1)
    {
