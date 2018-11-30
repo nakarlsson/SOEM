@@ -133,7 +133,7 @@ typedef struct PACKED eoe_ethaddr
 } eoe_ethaddr_t;
 PACKED_END
 
-/** EoE IP request structure */
+/** EoE IP request structure, storage only, no need to pack */
 typedef struct eoe_param
 {
    uint8_t mac_set : 1;
@@ -163,7 +163,7 @@ typedef struct PACKED
       uint16_t frameinfo2;
       uint16_t result;
    };
-   uint8         data[0];
+   uint8 data[0];
 } ec_EOEt;
 PACKED_END
 

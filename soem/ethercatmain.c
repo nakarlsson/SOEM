@@ -1095,7 +1095,7 @@ int ecx_mbxinhandler(ecx_contextt *context, uint8 group, int limit)
                      ec_EOEt * eoembx = (ec_EOEt *)mbx;
                      uint16 frameinfo1 = etohs(eoembx->frameinfo1);
                      int eoe_handled = 0;
-                     /* All non fragement data frame types are expected to be handled by
+                     /* All non fragment data frame types are expected to be handled by
                      * slave send/receive API if the EoE hook is set
                      */
                      if (EOE_HDR_FRAME_TYPE_GET(frameinfo1) == EOE_FRAG_DATA)
@@ -1113,10 +1113,9 @@ int ecx_mbxinhandler(ecx_contextt *context, uint8 group, int limit)
                      {
                         if (slaveitem->eoembxin && (slaveitem->eoembxinfull == FALSE))
                         {
-                           /* Fragement not handled by EoE hook */
+                           /* Fragment not handled by EoE hook */
                            memcpy(slaveitem->eoembxin, &mbx, mbxl);
                            slaveitem->eoembxinfull = TRUE;
-
                         }
                         else
                         {
@@ -1312,7 +1311,7 @@ int ecx_mbxreceive(ecx_contextt *context, uint16 slave, ec_mbxbuft *mbx, int tim
             {
                ec_EOEt * eoembx = (ec_EOEt *)mbx;
                uint16 frameinfo1 = etohs(eoembx->frameinfo1);
-               /* All non fragement data frame types are expected to be handled by
+               /* All non fragment data frame types are expected to be handled by
                * slave send/receive API if the EoE hook is set
                */
                if (EOE_HDR_FRAME_TYPE_GET(frameinfo1) == EOE_FRAG_DATA)
@@ -1321,7 +1320,7 @@ int ecx_mbxreceive(ecx_contextt *context, uint16 slave, ec_mbxbuft *mbx, int tim
                   {
                      if (context->EOEhook(context, slave, eoembx) > 0)
                      {
-                        /* Fragement handled by EoE hook */
+                        /* Fragment handled by EoE hook */
                         wkc = 0;
                      }
                   }

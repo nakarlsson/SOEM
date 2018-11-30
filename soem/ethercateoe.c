@@ -9,7 +9,7 @@
  *
  * Set / Get IP functions
  * Blocking send/receive Ethernet Frame
- * Read incoming EoE fragement to Ethernet Frame
+ * Read incoming EoE fragment to Ethernet Frame
  */
 
 #include <stdio.h>
@@ -43,7 +43,7 @@ static void EOE_ip_byte_to_uint32(uint8_t * byte_ip, eoe_ip4_addr_t * ip)
       byte_ip[0]); /* 4th octet */
 }
 
-/** EoE fragement data handler hook.
+/** EoE fragment data handler hook. Should not block.
 *
 * @param[in]  context = context struct
 * @param[in]  hook    = Pointer to hook function.
@@ -73,9 +73,8 @@ int ecx_EOEsetIp(ecx_contextt *context, uint16 slave, uint8 port, eoe_param_t * 
    uint8 flags = 0;
    int wkc;
 
-   ec_clearmbx(&MbxIn);
    /* Empty slave out mailbox if something is in. Timout set to 0 */
-   wkc = ecx_mbxreceive(context,  slave, (ec_mbxbuft *)&MbxIn, 0);
+   (void)ecx_mbxreceive(context,  slave, (ec_mbxbuft *)&MbxIn, 0);
    ec_clearmbx(&MbxOut);
    aEOEp = (ec_EOEt *)&MbxIn;
    EOEp = (ec_EOEt *)&MbxOut;  
@@ -95,51 +94,47 @@ int ecx_EOEsetIp(ecx_contextt *context, uint16 slave, uint8 port, eoe_param_t * 
       EOE_HDR_LAST_FRAGMENT);
    EOEp->frameinfo2 = 0;
   
-
+   /* The EoE frame will include "empty" IP/DNS entries, makes wireshark happy.
+    * Specification say they are optional, TwinCAT include empty entries.
+    */
    if (ipparam->mac_set)
    {
       flags |= EOE_PARAM_MAC_INCLUDE;
       memcpy(&EOEp->data[data_offset], ipparam->mac.addr, EOE_ETHADDR_LENGTH);
-      /*data_offset += EOE_ETHADDR_LENGTH;*/ /* TODO: are the data optional or must place holders be included */
    }
    data_offset += EOE_ETHADDR_LENGTH;
    if (ipparam->ip_set)
    {
       flags |= EOE_PARAM_IP_INCLUDE;
       EOE_ip_uint32_to_byte(&ipparam->ip, &EOEp->data[data_offset]);
-      /*data_offset += 4;*/
    }
    data_offset += 4;
    if (ipparam->subnet_set)
    {
       flags |= EOE_PARAM_SUBNET_IP_INCLUDE;
       EOE_ip_uint32_to_byte(&ipparam->subnet, &EOEp->data[data_offset]);
-      /*data_offset += 4;*/
    }
    data_offset += 4;
    if (ipparam->default_gateway_set)
    {
       flags |= EOE_PARAM_DEFAULT_GATEWAY_INCLUDE;
       EOE_ip_uint32_to_byte(&ipparam->default_gateway, &EOEp->data[data_offset]);
-      /*data_offset += 4;*/
    }
    data_offset += 4;
    if (ipparam->dns_ip_set)
    {
       flags |= EOE_PARAM_DNS_IP_INCLUDE;
       EOE_ip_uint32_to_byte(&ipparam->dns_ip, &EOEp->data[data_offset]);
-      /*data_offset += 4;*/
    }
    data_offset += 4;
    if (ipparam->dns_name_set)
    {
       flags |= EOE_PARAM_DNS_NAME_INCLUDE;
       memcpy(&EOEp->data[data_offset], (void *)ipparam->dns_name, EOE_DNS_NAME_LENGTH);
-      /*data_offset += EOE_DNS_NAME_LENGTH;*/
    }
    data_offset += EOE_DNS_NAME_LENGTH;
 
-   EOEp->mbxheader.length = htoes(4 + data_offset); // TODO ADD LENGTH
+   EOEp->mbxheader.length = htoes(EOE_PARAM_OFFSET + data_offset);
    EOEp->data[0] = flags;
 
    /* send EoE request to slave */
@@ -192,9 +187,8 @@ int ecx_EOEgetIp(ecx_contextt *context, uint16 slave, uint8 port, eoe_param_t * 
    uint8 flags = 0;
    int wkc;
 
-   ec_clearmbx(&MbxIn);
    /* Empty slave out mailbox if something is in. Timout set to 0 */
-   wkc = ecx_mbxreceive(context, slave, (ec_mbxbuft *)&MbxIn, 0);
+   (void)ecx_mbxreceive(context, slave, (ec_mbxbuft *)&MbxIn, 0);
    ec_clearmbx(&MbxOut);
    aEOEp = (ec_EOEt *)&MbxIn;
    EOEp = (ec_EOEt *)&MbxOut;
@@ -238,6 +232,10 @@ int ecx_EOEgetIp(ecx_contextt *context, uint16 slave, uint8 port, eoe_param_t * 
             }
             else
             {
+               /* The EoE frame will include "empty" IP/DNS entries,  makes 
+                * wireshark happy. Specification say they are optional, TwinCAT 
+                * include empty entries.
+                */
                flags = aEOEp->data[0];
                if (flags & EOE_PARAM_MAC_INCLUDE)
                {
@@ -245,7 +243,6 @@ int ecx_EOEgetIp(ecx_contextt *context, uint16 slave, uint8 port, eoe_param_t * 
                      &aEOEp->data[data_offset], 
                      EOE_ETHADDR_LENGTH);
                   ipparam->mac_set = 1;
-                  /*data_offset += EOE_ETHADDR_LENGTH;*/
                }
                data_offset += EOE_ETHADDR_LENGTH;
                if (flags & EOE_PARAM_IP_INCLUDE)
@@ -253,7 +250,6 @@ int ecx_EOEgetIp(ecx_contextt *context, uint16 slave, uint8 port, eoe_param_t * 
                   EOE_ip_byte_to_uint32(&aEOEp->data[data_offset],
                      &ipparam->ip);
                   ipparam->ip_set = 1;
-                  /*data_offset += 4;*/
                }
                data_offset += 4;
                if (flags & EOE_PARAM_SUBNET_IP_INCLUDE)
@@ -261,7 +257,6 @@ int ecx_EOEgetIp(ecx_contextt *context, uint16 slave, uint8 port, eoe_param_t * 
                   EOE_ip_byte_to_uint32(&aEOEp->data[data_offset],
                      &ipparam->subnet);
                   ipparam->subnet_set = 1;
-                  /*data_offset += 4;*/
                }
                data_offset += 4;
                if (flags & EOE_PARAM_DEFAULT_GATEWAY_INCLUDE)
@@ -269,7 +264,6 @@ int ecx_EOEgetIp(ecx_contextt *context, uint16 slave, uint8 port, eoe_param_t * 
                   EOE_ip_byte_to_uint32(&aEOEp->data[data_offset],
                      &ipparam->default_gateway);
                   ipparam->default_gateway_set = 1;
-                  /*data_offset += 4;*/
                }
                data_offset += 4;
                if (flags & EOE_PARAM_DNS_IP_INCLUDE)
@@ -277,7 +271,6 @@ int ecx_EOEgetIp(ecx_contextt *context, uint16 slave, uint8 port, eoe_param_t * 
                   EOE_ip_byte_to_uint32(&aEOEp->data[data_offset],
                      &ipparam->dns_ip);
                   ipparam->dns_ip_set = 1;
-                  /*data_offset += 4;*/
                }
                data_offset += 4;
                if (flags & EOE_PARAM_DNS_NAME_INCLUDE)
@@ -294,7 +287,6 @@ int ecx_EOEgetIp(ecx_contextt *context, uint16 slave, uint8 port, eoe_param_t * 
                   /* Assume ZERO terminated string */
                   memcpy(ipparam->dns_name, &aEOEp->data[data_offset], dns_len);
                   ipparam->dns_name_set = 1;
-                  /*data_offset += dns_len;*/
                }
                data_offset += EOE_DNS_NAME_LENGTH;
                /* Something os not correct, flag the error */
@@ -317,7 +309,7 @@ int ecx_EOEgetIp(ecx_contextt *context, uint16 slave, uint8 port, eoe_param_t * 
 /** EoE ethernet buffer write, blocking. 
 *
 * If the buffer is larger than the mailbox size then the buffer is sent in 
-* several fragments. The function will split the buf data in fragements and
+* several fragments. The function will split the buf data in fragments and
 * send them to the slave one by one.
 *
 * @param[in]  context    = context struct
@@ -411,8 +403,8 @@ int ecx_EOEsend(ecx_contextt *context, uint16 slave, uint8 port, int psize, void
 /** EoE ethernet buffer read, blocking.
 *
 * If the buffer is larger than the mailbox size then the buffer is received 
-* by several fragments. The function will assamble the fragements into
-* a complete Ethernet buffer-
+* by several fragments. The function will assamble the fragments into
+* a complete Ethernet buffer.
 *
 * @param[in]     context = context struct
 * @param[in]     slave   = Slave number
@@ -518,16 +510,16 @@ int ecx_EOErecv(ecx_contextt *context, uint16 slave, uint8 port, int * psize, vo
 /** EoE mailbox fragment read
 *
 * Will take the data in incoming mailbox buffer and copy to destination 
-* Ethernet frame buffer at given offset
+* Ethernet frame buffer at given offset and update current fragment variables
 *
-* @param[in]  MbxIn            = context struct
+* @param[in] MbxIn             = Received mailbox containing fragment data
 * @param[in/out] rxfragmentno  = Fragment number
 * @param[in/out] rxframesize   = Frame size
 * @param[in/out] rxframeoffset = Frame offset
 * @param[in/out] rxframeno     = Frame number
 * @param[in/out] psize         = Size in bytes of frame buffer.
 * @param[out] p                = Pointer to frame buffer
-* @return 0= if fragment OK, >0 if last fragement, <0 on error
+* @return 0= if fragment OK, >0 if last fragment, <0 on error
 */
 int ecx_EOEreadfragment(
    ec_mbxbuft * MbxIn,
@@ -557,7 +549,7 @@ int ecx_EOEreadfragment(
       /* Retrive fragment number, is it what we expect? */
       if (*rxfragmentno != EOE_HDR_FRAG_NO_GET(frameinfo2))
       {
-         /* If expected fragement number is not 0, reset working variables */
+         /* If expected fragment number is not 0, reset working variables */
          if (*rxfragmentno != 0)
          {
             *rxfragmentno = 0;
@@ -566,7 +558,7 @@ int ecx_EOEreadfragment(
             *rxframeno = 0;
          }
 
-         /* If incoming fragement number is not 0 we can't recover, exit */
+         /* If incoming fragment number is not 0 we can't recover, exit */
          if (EOE_HDR_FRAG_NO_GET(frameinfo2) > 0)
          {
             wkc = -EC_ERR_TYPE_EOE_INVALID_RX_DATA;
