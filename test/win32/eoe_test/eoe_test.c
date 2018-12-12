@@ -175,7 +175,7 @@ void CALLBACK RTthread(UINT uTimerID, UINT uMsg, DWORD_PTR dwUser, DWORD_PTR dw1
 
 void eoe_test(char *ifname)
 {
-   int i, j, oloop, iloop, wkc_count, chk, ixme;
+   int i, j, oloop, iloop, wkc_count, chk, ixme, eoe_send_wkc;
    UINT mmResult;
    int sc = 0;
    uint16 mbxsl = 0;
@@ -233,11 +233,10 @@ void eoe_test(char *ifname)
             {
 //               printf("CoE slave handler\r\n");
                if(!mbxsl) mbxsl = i;
-               ec_slave[i].coembxin = (uint8 *)&(mbx[sc++]);
-               ecx_setmbxhandlerstate(&ecx_context, i, ECT_MBXH_CYCLIC);
+               ecx_slavembxcyclic(&ecx_context, i);
                if (ec_slave[i].mbx_proto & ECT_MBXPROT_EOE)
                {
-                  ec_slave[i].eoembxin = (uint8 *)&(mbx[sc++]);
+                  ecx_EOEslavembxcyclic(&ecx_context, i);
                }
             }
          }
@@ -291,7 +290,12 @@ void eoe_test(char *ifname)
                           txbuf[ixme] = (uint8)rand();
                        }
                        printf("Send a new frame\n");
-                       ec_EOEsend(1, 0, sizeof(txbuf), txbuf, EC_TIMEOUTRXM);
+                       eoe_send_wkc = ec_EOEsend(1, 0, sizeof(txbuf), txbuf, EC_TIMEOUTRXM);
+                       if (eoe_send_wkc <= 0)
+                       {
+                          printf("ec_EOEsend frame send filed!\n");
+                       }
+                       
                        eoe_frame_send_and_read = 1;
 
                     }

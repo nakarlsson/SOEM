@@ -168,6 +168,7 @@ typedef struct PACKED
 PACKED_END
 
 int ecx_EOEdefinehook(ecx_contextt *context, void *hook);
+int ecx_EOEslavembxcyclic(ecx_contextt *context, uint16 slave);
 int ecx_EOEsetIp(ecx_contextt *context, 
    uint16 slave, 
    uint8 port, 

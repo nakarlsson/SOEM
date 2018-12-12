@@ -123,3 +123,30 @@ int osal_thread_create_rt(void **thandle, int stacksize, void *func, void *param
    }
    return ret;
 }
+
+void *osal_mutex_create(void)
+{
+   osal_mutext *mutex;
+   mutex = (osal_mutext *)osal_malloc (sizeof(osal_mutext));
+   if(mutex)
+   {
+      InitializeCriticalSection(mutex);
+   }
+   return (void *)mutex;
+}
+
+void osal_mutex_destroy(osal_mutext *mutex)
+{
+   DeleteCriticalSection (mutex);
+   osal_free(mutex);
+}
+
+void osal_mutex_lock(osal_mutext *mutex)
+{
+   EnterCriticalSection(mutex);
+}
+
+void osal_mutex_unlock(osal_mutext *mutex)
+{
+   LeaveCriticalSection(mutex);
+}

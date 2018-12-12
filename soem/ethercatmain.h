@@ -84,16 +84,62 @@ typedef struct PACKED ec_state_status
 } ec_state_status;
 PACKED_END
 
-#define EC_MAXFIFODEPTH 32
+/** mailbox buffer array */
+typedef uint8 ec_mbxbuft[EC_MAXMBX + 1];
 
-typedef struct ec_fifo
+#define EC_MBXPOOLSIZE  32
+#define EC_MBXINENABLE  (uint8 *)1
+
+typedef struct
 {
-   int      txposition, rxposition;
-   int      size;
-   uint8    *fifobuf[EC_MAXFIFODEPTH];
-   uint16   slave[EC_MAXFIFODEPTH];
-   uint16   mbxprotocoll[EC_MAXFIFODEPTH];
-} ec_fifo_t;
+   int         listhead, listtail, listcount;
+   int         mbxemptylist[EC_MBXPOOLSIZE];
+   osal_mutext *mbxmutex;
+   ec_mbxbuft  mbx[EC_MBXPOOLSIZE];
+} ec_mbxpoolt;
+
+#define EC_MBXQUEUESTATE_NONE       0
+#define EC_MBXQUEUESTATE_REQ        1
+#define EC_MBXQUEUESTATE_FAIL       2
+#define EC_MBXQUEUESTATE_DONE       3
+
+typedef struct
+{
+   int         listhead, listtail, listcount;
+   ec_mbxbuft  *mbx[EC_MBXPOOLSIZE];
+   int         mbxstate[EC_MBXPOOLSIZE];
+   int         mbxremove[EC_MBXPOOLSIZE];
+   int         mbxticket[EC_MBXPOOLSIZE];
+   uint16      mbxslave[EC_MBXPOOLSIZE];
+   osal_mutext *mbxmutex;
+} ec_mbxqueuet;
+
+#define VOE_SCOPEMAXCHANNELS    6
+#define EC_MAXSCOPESLAVE        6
+#define EC_SCOPECHANNELS        6
+#define EC_SCOPEBUFFERSIZE      4069
+
+typedef struct
+{
+    int             channels;
+    int             redpos, writepos, counter;
+    double          sampletime;
+    double          fdata[EC_SCOPECHANNELS][EC_SCOPEBUFFERSIZE];
+} ec_ringscopet;
+
+typedef struct
+{
+   uint16         slave;
+   uint16         channel;
+} ec_channelassignt;
+
+typedef struct ec_scope
+{
+   uint16            scopeslave[EC_MAXSCOPESLAVE];
+   int               scopeslavecnt;
+   ec_channelassignt channelassign[EC_SCOPECHANNELS];
+   ec_ringscopet     ringscope;
+} ec_scopet;
 
 #define ECT_MBXPROT_AOE      0x0001
 #define ECT_MBXPROT_EOE      0x0002
@@ -114,9 +160,6 @@ typedef struct ec_fifo
 #define ECT_MBXH_NONE         0
 #define ECT_MBXH_CYCLIC       1
 #define ECT_MBXH_LOST         2
-
-/** mailbox buffer array */
-typedef uint8 ec_mbxbuft[EC_MAXMBX + 1];
 
 /** for list of ethercat slaves detected */
 typedef struct ec_slave
@@ -340,10 +383,12 @@ typedef struct ec_group
    int32            mbxstatuslength;
    /** mailbox status lookup table */
    uint16           mbxstatuslookup[EC_MAXSLAVE];
-   /** mailbox fifo struct for mailbax handler */
-   ec_fifo_t        mbxfifo;
-   /** mailbox fifo buffer for mailbax handler */
-   ec_mbxbuft       mbxfifobuffer[EC_MAXFIFODEPTH];  
+   /** mailbox last handled in mxbhandler */
+   uint16           lastmbxpos;
+   /** mailbox  transmit queue struct */
+   ec_mbxqueuet     mbxtxqueue; 
+   /** pointer to group scope variables */
+   ec_scopet        *scopevar; 
 } ec_groupt;
 
 /** SII FMMU structure */
@@ -496,6 +541,8 @@ struct ecx_context
    ec_eepromSMt   *eepSM;
    /** internal, FMMU list from eeprom */
    ec_eepromFMMUt *eepFMMU;
+   /** internal, mailbox pool */
+   ec_mbxpoolt    *mbxpool;
    /** registered FoE hook */
    int            (*FOEhook)(uint16 slave, int packetnumber, int datasize);
    /** registered EoE hook */
@@ -513,6 +560,7 @@ extern int         ec_slavecount;
 extern ec_groupt   ec_group[EC_MAXGROUP];
 extern boolean     EcatError;
 extern int64       ec_DCtime;
+extern ec_mbxpoolt ec_mbxpool;  
 
 void ec_pusherror(const ec_errort *Ec);
 boolean ec_poperror(ec_errort *Ec);
@@ -574,11 +622,11 @@ int ecx_siiPDO(ecx_contextt *context, uint16 slave, ec_eepromPDOt* PDO, uint8 t)
 int ecx_readstate(ecx_contextt *context);
 int ecx_writestate(ecx_contextt *context, uint16 slave);
 uint16 ecx_statecheck(ecx_contextt *context, uint16 slave, uint16 reqstate, int timeout);
-int ecx_setmbxhandlerstate(ecx_contextt *context, uint16 slave, int mbxhandlerstate);
 int ecx_mbxhandler(ecx_contextt *context, uint8 group, int limit);
 int ecx_mbxempty(ecx_contextt *context, uint16 slave, int timeout);
 int ecx_mbxsend(ecx_contextt *context, uint16 slave,ec_mbxbuft *mbx, int timeout);
-int ecx_mbxreceive(ecx_contextt *context, uint16 slave, ec_mbxbuft *mbx, int timeout);
+//int ecx_mbxreceive(ecx_contextt *context, uint16 slave, ec_mbxbuft *mbx, int timeout);
+int ecx_mbxreceive2(ecx_contextt *context, uint16 slave, ec_mbxbuft **mbx, int timeout);
 void ecx_esidump(ecx_contextt *context, uint16 slave, uint8 *esibuf);
 uint32 ecx_readeeprom(ecx_contextt *context, uint16 slave, uint16 eeproma, int timeout);
 int ecx_writeeeprom(ecx_contextt *context, uint16 slave, uint16 eeproma, uint16 data, int timeout);
@@ -595,6 +643,11 @@ int ecx_receive_processdata_group(ecx_contextt *context, uint8 group, int timeou
 int ecx_send_processdata(ecx_contextt *context);
 int ecx_send_overlap_processdata(ecx_contextt *context);
 int ecx_receive_processdata(ecx_contextt *context, int timeout);
+ec_mbxbuft *ecx_getmbx(ecx_contextt *context);
+int ecx_dropmbx(ecx_contextt *context, ec_mbxbuft *mbx);
+int ecx_initmbxpool(ecx_contextt *context);
+int ecx_initmbxqueue(ecx_contextt *context, uint16 group);
+int ecx_slavembxcyclic(ecx_contextt *context, uint16 slave);
 
 #ifdef __cplusplus
 }

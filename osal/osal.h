@@ -47,6 +47,12 @@ ec_timet osal_current_time(void);
 void osal_time_diff(ec_timet *start, ec_timet *end, ec_timet *diff);
 int osal_thread_create(void *thandle, int stacksize, void *func, void *param);
 int osal_thread_create_rt(void *thandle, int stacksize, void *func, void *param);
+void *osal_malloc(size_t size);
+void osal_free(void *ptr);
+void *osal_mutex_create(void);
+void osal_mutex_destroy(void *mutex);
+void osal_mutex_lock(void *mutex);
+void osal_mutex_unlock(void *mutex);
 
 #ifdef __cplusplus
 }

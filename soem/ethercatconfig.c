@@ -118,12 +118,8 @@ void ecx_init_context(ecx_contextt *context)
    for(lp = 0; lp < context->maxgroup; lp++)
    {
       context->grouplist[lp].logstartaddr = lp << 16; /* default start address per group entry */
+      ecx_initmbxqueue(context, lp);
    }
-   for(lp = 0; lp < EC_MAXFIFODEPTH; lp++)
-   {
-      context->grouplist[0].mbxfifo.fifobuf[lp] = (uint8 *)&(context->grouplist[0].mbxfifobuffer[lp]);
-   }
-   context->grouplist[0].mbxfifo.txposition = context->grouplist[0].mbxfifo.rxposition = context->grouplist[0].mbxfifo.size = 0;
 }
 
 int ecx_detect_slaves(ecx_contextt *context)
@@ -666,6 +662,7 @@ static int ecx_map_coe_soe(ecx_contextt *context, uint16 slave, int thread_n)
       Osize = 0;
       if (context->slavelist[slave].mbx_proto & ECT_MBXPROT_COE) /* has CoE */
       {
+         EC_PRINT("COESLAVE\n\r");
          rval = 0;
          if (context->slavelist[slave].CoEdetails & ECT_COEDET_SDOCA) /* has Complete Access */
          {
@@ -1165,14 +1162,14 @@ static void ecx_config_create_mbxstatus_mappings(ecx_contextt *context, void *pI
          sizeof(ec_fmmut), &(context->slavelist[slave].FMMU[FMMUc]), EC_TIMEOUTRET3);
 
       position = etohl(context->slavelist[slave].FMMU[FMMUc].LogStart);
-      printf("position1 %d, %d, %d\r\n",position, context->grouplist[group].Obytes, context->grouplist[group].Ibytes);
       context->slavelist[slave].mbxstatus = (uint8 *)(pIOmap) + position;
       position -= context->grouplist[group].Obytes + context->grouplist[group].Ibytes;
       context->grouplist[group].mbxstatuslookup[position] = slave;
-      printf("position2 %d, %d\r\n",position, slave);
       context->grouplist[group].mbxstatuslength++;
-      printf("mbxstl %d, %d\r\n",group, context->grouplist[group].mbxstatuslength);
       FMMUc++;
+      /* account for MBXSTATUS wkc increment */
+      if(!context->slavelist[slave].Ibytes)
+         context->grouplist[group].inputsWKC++;
    }
    context->slavelist[slave].FMMUunused = FMMUc;
 }
@@ -1589,7 +1586,7 @@ int ecx_reconfig_slave(ecx_contextt *context, uint16 slave, int timeout)
    state = ecx_statecheck(context, slave, EC_STATE_INIT, EC_TIMEOUTSTATE);
    if(state == EC_STATE_INIT)
    {
-      /* program all enabled SM */
+      /* program all SM if active */
       for( nSM = 0 ; nSM < EC_MAXSM ; nSM++ )
       {
          if (context->slavelist[slave].SM[nSM].StartAddr)
@@ -1598,6 +1595,8 @@ int ecx_reconfig_slave(ecx_contextt *context, uint16 slave, int timeout)
                sizeof(ec_smt), &context->slavelist[slave].SM[nSM], timeout);
          }
       }
+      /* small delay to allow slave to process SM changes */
+      osal_usleep(5000);
       ecx_FPWRw(context->port, configadr, ECT_REG_ALCTL, htoes(EC_STATE_PRE_OP) , timeout);
       state = ecx_statecheck(context, slave, EC_STATE_PRE_OP, EC_TIMEOUTSTATE); /* check state change pre-op */
       if( state == EC_STATE_PRE_OP)
