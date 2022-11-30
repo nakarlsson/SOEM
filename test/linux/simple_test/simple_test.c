@@ -50,7 +50,7 @@ OSAL_THREAD_FUNC register_reader( void *ifname )
             {
                 printf("Clear link loss counters\n");
                 uint8_t llcnt[4];
-                llcnt[0] = llcnt[2] = llcnt[2] = llcnt[3] = 0;
+                llcnt[0] = llcnt[1] = llcnt[2] = llcnt[3] = 0;
                 /* Reset all slaves linkloss counter */
                 ec_BWR(0x0000, ECT_REG_LLCNT, sizeof(llcnt), &llcnt, EC_TIMEOUTRET3);
             }
@@ -91,7 +91,7 @@ OSAL_THREAD_FUNC register_reader( void *ifname )
 					// 	ec_send_processdata();
 					// if(i > 120)
 						ec_send_processdata();
-					wkc = ec_receive_processdata(90 * 1000);
+					wkc = ec_receive_processdata(20 * 1000);
 
 					uint16_t adr;
 					if(wkc_last_cycle != wkc) {
@@ -286,7 +286,7 @@ int main(int argc, char *argv[])
 		// osal_thread_create(&thread1, 128000, &ecatcheck, (void*) &ctime);
 		/* start cyclic part */
         osal_thread_create_rt(&thread1, 128000, &register_reader, (void*) argv[1]);
-        while(1);
+        while(1)
         {
             osal_usleep(100*1000*1000);
         }
